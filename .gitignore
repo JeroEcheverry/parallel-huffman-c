@@ -1,0 +1,9 @@
+# Binarios y objetos
+*.o
+huff
+editor
+
+# Archivos generados por las pruebas
+pruebas/datos/
+pruebas/salida/
+*.huff
