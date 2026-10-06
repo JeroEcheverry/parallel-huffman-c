@@ -57,7 +57,7 @@ int huff_leer_archivo(const char *ruta, unsigned char **buf, size_t *n)
     return 0;
 }
 
-int huff_escribir_todo(int fd, const void *buf, size_t n)
+ssize_t huff_escribir_todo(int fd, const void *buf, size_t n)
 {
     const unsigned char *p = buf;
     size_t escritos = 0;

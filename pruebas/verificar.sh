@@ -24,6 +24,11 @@ printf 'canción, pingüino, ñandú\n' > "$DATOS/tildes.txt" # bytes mayores a 
 head -c 200000 /dev/urandom > "$DATOS/aleatorio.bin"     # binario: los 256 valores
 for i in $(seq 1 20000); do echo "linea $i del archivo grande"; done > "$DATOS/grande.txt"
 
+# Limites de bloque (HUFF_TAM_BLOQUE = 65536 bytes)
+head -c 65536  "$DATOS/grande.txt" > "$DATOS/un_bloque_exacto.txt"   # exactamente 1 bloque
+head -c 65537  "$DATOS/grande.txt" > "$DATOS/bloque_mas_uno.txt"     # 1 bloque + 1 byte
+head -c 196608 "$DATOS/grande.txt" > "$DATOS/tres_bloques.txt"       # exactamente 3 bloques
+
 # --- Ejecucion ---------------------------------------------------------------------
 fallos=0
 for original in "$DATOS"/*; do
