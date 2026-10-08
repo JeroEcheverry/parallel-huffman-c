@@ -66,7 +66,7 @@ static Nodo *sacar_minimo(Nodo *nodos[], int *n)
  *   bits << 1        -> corre los bits y deja un 0 al final
  *   (bits << 1) | 1  -> corre los bits y deja un 1 al final
  */
-static void recorrer(const Nodo *nodo, uint32_t bits, int largo,
+static void recorrer(const Nodo *nodo, uint64_t bits, int largo,
                      Codigo tabla[HUFF_SIMBOLOS])
 {
     if (nodo->izq == NULL && nodo->der == NULL) {

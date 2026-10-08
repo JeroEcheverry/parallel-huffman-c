@@ -1,18 +1,21 @@
 /*
- * decodificar.c -- descompresion de un archivo .huff por bloques
- *                  (version 2, secuencial).
+ * decodificar.c -- descompresion concurrente de un archivo .huff por bloques.
  * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
  *
- * Pasos:
+ * Etapas:
  *   1. Leer el archivo .huff completo a memoria.
  *   2. Validar el encabezado y leer la tabla de tamanos.
  *   3. Calcular donde empieza cada bloque comprimido.
  *   4. Reconstruir el mismo arbol que uso el compresor.
- *   5. Decodificar cada bloque en su lugar dentro de la salida.
- *   6. Escribir el resultado.
+ *   5. [PARALELO] Cada hilo decodifica bloques y escribe el resultado en
+ *      su posicion de la salida (bloque i -> bytes i*tam_bloque en adelante).
+ *   6. Escribir el resultado en el archivo.
  *
- * El paso 5 trabaja cada bloque sin tocar los demas: en la fase 3 se
- * reparte entre varios hilos sin cambiar la logica.
+ * Sincronizacion: en la etapa 5 cada bloque se escribe en una zona de
+ * 'salida' que no se cruza con la de ningun otro bloque, y el arbol solo
+ * se lee. Por eso los hilos no necesitan mutex para decodificar; solo el
+ * reparto de tareas (pool.c) y el progreso (progreso.c) usan mutex. El
+ * join del pool garantiza que la salida este completa antes de escribirla.
  */
 #include "huffman.h"
 
@@ -20,7 +23,20 @@
 #include <stdio.h>     /* fprintf, perror                  */
 #include <stdlib.h>    /* malloc, free                     */
 #include <string.h>    /* memcmp, memcpy, memset           */
-#include <unistd.h>    /* close                            */
+#include <unistd.h>    /* close, unlink                    */
+
+/* Datos que comparten los hilos durante la etapa 5 (todos de solo lectura,
+   salvo la zona de 'salida' que le corresponde a cada bloque). */
+typedef struct {
+    const Nodo          *raiz;
+    const unsigned char *datos;        /* primer byte del bloque 0      */
+    const uint64_t      *tamanos;      /* bytes comprimidos por bloque  */
+    const uint64_t      *inicio;       /* donde empieza cada bloque     */
+    unsigned char       *salida;       /* archivo original reconstruido */
+    uint64_t             tam_original;
+    uint64_t             tam_bloque;
+    HuffProgreso        *progreso;
+} Descompresion;
 
 /*
  * Recorre el arbol siguiendo los bits de 'datos' y escribe en 'salida'
@@ -78,7 +94,29 @@ static void calcular_inicios(const uint64_t *tamanos, uint64_t n_bloques,
     }
 }
 
-int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida)
+/* Etapa 5: tarea que ejecuta un hilo del pool para el bloque i. */
+static int tarea_decodificar(void *contexto, uint64_t i)
+{
+    Descompresion *d = contexto;
+    if (huff_progreso_cancelado(d->progreso)) return -1;
+
+    uint64_t destino = i * d->tam_bloque;
+    uint64_t largo   = d->tam_original - destino < d->tam_bloque
+                     ? d->tam_original - destino : d->tam_bloque;
+
+    if (decodificar_datos(d->raiz, d->datos + d->inicio[i], (size_t)d->tamanos[i],
+                          d->salida + destino, largo) < 0) {
+        fprintf(stderr, "Error: el bloque %llu esta incompleto\n",
+                (unsigned long long)i);
+        return -1;
+    }
+
+    huff_progreso_avanzar(d->progreso, 1);
+    return 0;
+}
+
+int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida,
+                      int n_hilos, HuffProgreso *progreso)
 {
     unsigned char *archivo   = NULL;
     unsigned char *salida    = NULL;
@@ -96,6 +134,7 @@ int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida)
     const unsigned char *p     = NULL;   /* cursor para leer el encabezado */
     const unsigned char *datos = NULL;
     size_t               n_datos = 0;
+    Descompresion        d;
 
     /* 1. Leer el .huff completo. */
     if (huff_leer_archivo(ruta_entrada, &archivo, &n) < 0) {
@@ -136,7 +175,7 @@ int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida)
     n_datos = n - HUFF_ENCABEZADO - n_bloques * sizeof(uint64_t);
 
     /* 3. Donde empieza cada bloque, y que ninguno se salga del archivo. */
-        calcular_inicios(tamanos, n_bloques, inicio);
+    calcular_inicios(tamanos, n_bloques, inicio);
     for (uint64_t i = 0; i < n_bloques; i++) {
         if (tamanos[i] > n_datos || inicio[i] > n_datos - tamanos[i]) {
             fprintf(stderr, "Error: el bloque %llu se sale del archivo\n",
@@ -152,24 +191,25 @@ int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida)
         goto fin;
     }
 
-    /* 5. Decodificar cada bloque en su posicion de la salida
-          (en la fase 3: un hilo por bloque). */
     salida = malloc(tam_original > 0 ? (size_t)tam_original : 1);
     if (salida == NULL) {
         perror("malloc");
         goto fin;
     }
-    for (uint64_t i = 0; i < n_bloques; i++) {
-        uint64_t destino = i * tam_bloque;
-        uint64_t largo   = tam_original - destino < tam_bloque
-                         ? tam_original - destino : tam_bloque;
 
-        if (decodificar_datos(raiz, datos + inicio[i], (size_t)tamanos[i],
-                              salida + destino, largo) < 0) {
-            fprintf(stderr, "Error: el bloque %llu esta incompleto\n",
-                    (unsigned long long)i);
-            goto fin;
-        }
+    /* 5. Decodificar todos los bloques en paralelo. */
+    d.raiz         = raiz;
+    d.datos        = datos;
+    d.tamanos      = tamanos;
+    d.inicio       = inicio;
+    d.salida       = salida;
+    d.tam_original = tam_original;
+    d.tam_bloque   = tam_bloque;
+    d.progreso     = progreso;
+
+    huff_progreso_fijar_total(progreso, n_bloques);
+    if (pool_ejecutar(n_hilos, n_bloques, tarea_decodificar, &d) < 0) {
+        goto fin;
     }
 
     /* 6. Escribir el resultado. */
@@ -186,11 +226,17 @@ int huff_descomprimir(const char *ruta_entrada, const char *ruta_salida)
     resultado = 0;
 
 fin:
-    if (fd >= 0) close(fd);
+    if (fd >= 0) {
+        close(fd);
+        if (resultado < 0) {
+            unlink(ruta_salida);   /* no se deja un archivo a medias */
+        }
+    }
     free(salida);
     free(inicio);
     free(tamanos);
     free(archivo);
     liberar_arbol(raiz);
+    huff_progreso_terminar(progreso);
     return resultado;
 }

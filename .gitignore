@@ -1,9 +1,12 @@
 # Binarios y objetos
 *.o
 huff
-editor
+editor_huff
+huff_tsan
+editor_huff_tsan
 
 # Archivos generados por las pruebas
 pruebas/datos/
 pruebas/salida/
 *.huff
+*.parcial

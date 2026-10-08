@@ -1,6 +1,10 @@
 /*
  * frecuencias.c -- conteo de apariciones de cada byte.
  * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
+ *
+ * En la compresion concurrente cada hilo llama esta funcion sobre un
+ * bloque distinto y con la tabla propia de ese bloque, asi que nunca dos
+ * hilos incrementan el mismo contador.
  */
 #include "huffman.h"
 

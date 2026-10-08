@@ -1,18 +1,21 @@
 #!/bin/bash
 # ====================================================================================
-#  verificar.sh  --  Prueba de integridad del compresor Huffman
+#  verificar.sh  --  Prueba de integridad del compresor Huffman concurrente
 # ====================================================================================
-#  Por cada archivo de pruebas/datos: lo comprime, lo descomprime y compara el
-#  resultado con el original usando md5sum. Si los hashes coinciden, el archivo
-#  se recupero sin perder ni un byte.
+#  Por cada archivo de pruebas/datos y por cada cantidad de hilos (1, 2, 4 y 8):
+#    1. Lo comprime y lo descomprime.
+#    2. Compara el md5 del original con el del recuperado.
+#  Ademas comprueba que el .huff sea identico sin importar cuantos hilos se usen:
+#  si el escritor no respetara el orden de los bloques, los archivos diferirian.
 #
-#  Los archivos de prueba se generan aqui mismo para cubrir los casos limite.
+#  Variable opcional: HUFF=<binario> para probar otra compilacion (ej. ./huff_tsan).
 # ====================================================================================
 
 DIR=$(dirname "$0")
 DATOS="$DIR/datos"
 SALIDA="$DIR/salida"
-HUFF="$DIR/../huff"
+HUFF="${HUFF:-$DIR/../huff}"
+HILOS="1 2 4 8"
 
 mkdir -p "$DATOS" "$SALIDA"
 
@@ -33,22 +36,39 @@ head -c 196608 "$DATOS/grande.txt" > "$DATOS/tres_bloques.txt"       # exactamen
 fallos=0
 for original in "$DATOS"/*; do
     nombre=$(basename "$original")
-    comprimido="$SALIDA/$nombre.huff"
-    recuperado="$SALIDA/$nombre.rec"
-
-    if ! "$HUFF" c "$original" "$comprimido" || ! "$HUFF" d "$comprimido" "$recuperado"; then
-        echo "[FALLA] $nombre: el programa retorno error"
-        fallos=$((fallos + 1))
-        continue
-    fi
-
     md5_original=$(md5sum < "$original" | cut -d' ' -f1)
-    md5_recuperado=$(md5sum < "$recuperado" | cut -d' ' -f1)
+    referencia=""
+    estado="OK"
 
-    if [ "$md5_original" = "$md5_recuperado" ]; then
-        echo "[OK]    $nombre  ($(stat -c%s "$original") -> $(stat -c%s "$comprimido") bytes)"
+    for h in $HILOS; do
+        comprimido="$SALIDA/$nombre.$h.huff"
+        recuperado="$SALIDA/$nombre.$h.rec"
+
+        if ! "$HUFF" c "$original" "$comprimido" "$h" 2>/dev/null ||
+           ! "$HUFF" d "$comprimido" "$recuperado" "$h" 2>/dev/null; then
+            estado="FALLA: el programa retorno error con $h hilo(s)"
+            break
+        fi
+
+        if [ "$(md5sum < "$recuperado" | cut -d' ' -f1)" != "$md5_original" ]; then
+            estado="FALLA: el md5 no coincide con $h hilo(s)"
+            break
+        fi
+
+        # El .huff debe salir identico con cualquier cantidad de hilos.
+        if [ -z "$referencia" ]; then
+            referencia="$comprimido"
+        elif ! cmp -s "$referencia" "$comprimido"; then
+            estado="FALLA: el .huff con $h hilos difiere del de 1 hilo"
+            break
+        fi
+    done
+
+    if [ "$estado" = "OK" ]; then
+        printf "[OK]    %-22s (%s -> %s bytes, hilos: %s)\n" "$nombre" \
+               "$(stat -c%s "$original")" "$(stat -c%s "$referencia")" "$HILOS"
     else
-        echo "[FALLA] $nombre: el md5 no coincide"
+        echo "[FALLA] $nombre: $estado"
         fallos=$((fallos + 1))
     fi
 done
