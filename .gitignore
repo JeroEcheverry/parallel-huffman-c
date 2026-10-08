@@ -10,3 +10,4 @@ pruebas/datos/
 pruebas/salida/
 *.huff
 *.parcial
+/*.txt
