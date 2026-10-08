@@ -1,21 +1,6 @@
 #!/bin/bash
-# ====================================================================================
-#  prueba_editor.sh  --  Prueba de la integracion del compresor con el editor
-# ====================================================================================
-#  Le envia comandos al editor por la entrada estandar y revisa su salida.
-#  HUFF_DEMORA_MS hace que cada bloque tarde un poco mas, para que la tarea en
-#  segundo plano siga corriendo cuando llegan los comandos siguientes.
-#
-#  Casos:
-#    1. Durante la compresion, un comando lector (p) funciona y uno escritor (a)
-#       se rechaza con "Archivo ocupado". El editor nunca se congela.
-#    2. La compresion termina y el .huff se descomprime identico al original.
-#    3. Al terminar la tarea, el archivo vuelve a aceptar modificaciones.
-#    4. Descomprimir sobre el archivo abierto lo reemplaza y se puede deshacer.
-#    5. Salir (q) con una tarea en curso la cancela y no deja archivos a medias.
-#
-#  Variable opcional: EDITOR_BIN=<binario> (ej. ./editor_huff_tsan).
-# ====================================================================================
+# Prueba las tareas en segundo plano y la compresion desde el editor.
+# EDITOR_BIN permite elegir otro ejecutable, por ejemplo uno con ThreadSanitizer.
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 EDITOR_BIN="${EDITOR_BIN:-$DIR/../editor_huff}"
@@ -39,8 +24,7 @@ revisar() {   # revisar <descripcion> <comando que debe salir bien>
     fi
 }
 
-# --- Casos 1, 2 y 3 ------------------------------------------------------------------
-# 'e v' muestra el progreso en vivo y retorna cuando la tarea termina.
+# Prueba el acceso al archivo durante una tarea y la compresion/descompresion.
 {
     echo "o notas.txt"
     echo "c notas.huff"
@@ -68,7 +52,7 @@ revisar "el archivo descomprimido es identico al original (md5)" \
 revisar "despues de la tarea se puede volver a modificar" \
         "[ \"\$(tail -n 1 notas.txt)\" = 'linea agregada despues' ]"
 
-# --- Caso 4: descomprimir sobre el archivo abierto ---------------------------------
+# Prueba reemplazar el archivo abierto y verificar su contenido.
 cp original.txt abierto.txt
 {
     echo "o abierto.txt"
@@ -84,7 +68,7 @@ revisar "descomprimir sobre el archivo abierto lo recarga" \
 revisar "el archivo abierto quedo igual al original" \
         "cmp -s abierto.txt original.txt"
 
-# --- Caso 5: salir con una tarea en curso ------------------------------------------
+# Prueba que al salir se cancele una tarea que sigue activa.
 {
     echo "o notas.txt"
     echo "c cancelado.huff"
@@ -96,7 +80,7 @@ revisar "q cancela la tarea en curso" \
 revisar "la tarea cancelada no deja un .huff a medias" \
         "[ ! -e cancelado.huff ]"
 
-# Los avisos de ThreadSanitizer (si se usa editor_huff_tsan) salen en la salida.
+# Revisa que las sesiones no hayan generado avisos de ThreadSanitizer.
 revisar "sin avisos de ThreadSanitizer" \
         "! grep -q 'WARNING: ThreadSanitizer' sesion1.txt sesion2.txt sesion3.txt"
 

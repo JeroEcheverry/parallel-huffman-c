@@ -1,15 +1,6 @@
 #!/bin/bash
-# ====================================================================================
-#  verificar.sh  --  Prueba de integridad del compresor Huffman concurrente
-# ====================================================================================
-#  Por cada archivo de pruebas/datos y por cada cantidad de hilos (1, 2, 4 y 8):
-#    1. Lo comprime y lo descomprime.
-#    2. Compara el md5 del original con el del recuperado.
-#  Ademas comprueba que el .huff sea identico sin importar cuantos hilos se usen:
-#  si el escritor no respetara el orden de los bloques, los archivos diferirian.
-#
-#  Variable opcional: HUFF=<binario> para probar otra compilacion (ej. ./huff_tsan).
-# ====================================================================================
+# Prueba que los archivos se recuperen correctamente con distintas cantidades de hilos.
+# HUFF permite elegir otro ejecutable, por ejemplo uno compilado con ThreadSanitizer.
 
 DIR=$(dirname "$0")
 DATOS="$DIR/datos"
@@ -19,20 +10,20 @@ HILOS="1 2 4 8"
 
 mkdir -p "$DATOS" "$SALIDA"
 
-# --- Casos de prueba ---------------------------------------------------------------
-: > "$DATOS/vacio.txt"                                   # archivo de 0 bytes
-printf 'aaaaaaaaaa' > "$DATOS/un_simbolo.txt"            # un solo simbolo distinto
-printf 'ab' > "$DATOS/dos_simbolos.txt"                  # el arbol mas pequeno posible
-printf 'canción, pingüino, ñandú\n' > "$DATOS/tildes.txt" # bytes mayores a 127 (UTF-8)
-head -c 200000 /dev/urandom > "$DATOS/aleatorio.bin"     # binario: los 256 valores
+# Prepara archivos de prueba con distintos contenidos y tamanos.
+: > "$DATOS/vacio.txt"
+printf 'aaaaaaaaaa' > "$DATOS/un_simbolo.txt"
+printf 'ab' > "$DATOS/dos_simbolos.txt"
+printf 'canción, pingüino, ñandú\n' > "$DATOS/tildes.txt"
+head -c 200000 /dev/urandom > "$DATOS/aleatorio.bin"
 for i in $(seq 1 20000); do echo "linea $i del archivo grande"; done > "$DATOS/grande.txt"
 
-# Limites de bloque (HUFF_TAM_BLOQUE = 65536 bytes)
-head -c 65536  "$DATOS/grande.txt" > "$DATOS/un_bloque_exacto.txt"   # exactamente 1 bloque
-head -c 65537  "$DATOS/grande.txt" > "$DATOS/bloque_mas_uno.txt"     # 1 bloque + 1 byte
-head -c 196608 "$DATOS/grande.txt" > "$DATOS/tres_bloques.txt"       # exactamente 3 bloques
+# Casos que revisan archivos del tamano de un bloque y de varios bloques.
+head -c 65536  "$DATOS/grande.txt" > "$DATOS/un_bloque_exacto.txt"
+head -c 65537  "$DATOS/grande.txt" > "$DATOS/bloque_mas_uno.txt"
+head -c 196608 "$DATOS/grande.txt" > "$DATOS/tres_bloques.txt"
 
-# --- Ejecucion ---------------------------------------------------------------------
+# Comprime y descomprime cada archivo, comparando el resultado.
 fallos=0
 for original in "$DATOS"/*; do
     nombre=$(basename "$original")
@@ -55,7 +46,6 @@ for original in "$DATOS"/*; do
             break
         fi
 
-        # El .huff debe salir identico con cualquier cantidad de hilos.
         if [ -z "$referencia" ]; then
             referencia="$comprimido"
         elif ! cmp -s "$referencia" "$comprimido"; then
