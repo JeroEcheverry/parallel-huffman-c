@@ -1,15 +1,4 @@
-/*
- * main_huff.c -- programa de prueba del compresor, sin el editor.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
- *
- * Uso:
- *   ./huff c <entrada> <salida.huff> [hilos]   comprimir
- *   ./huff d <entrada.huff> <salida> [hilos]   descomprimir
- *
- * 'hilos' es opcional; si no se da se usa un hilo por nucleo.
- * Al terminar se imprime en stderr el tiempo que tomo la operacion,
- * para poder comparar el rendimiento con distinta cantidad de hilos.
- */
+/* Programa de consola para comprimir o descomprimir archivos. */
 
 #include "huffman.h"
 

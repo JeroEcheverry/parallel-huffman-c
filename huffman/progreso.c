@@ -1,16 +1,9 @@
-/*
- * progreso.c -- estado de avance compartido entre hilos.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
- *
- * Los hilos trabajadores llaman huff_progreso_avanzar al terminar cada
- * unidad de trabajo; otro hilo (el editor) lee el porcentaje o espera a
- * que cambie. Cada funcion toma el mutex solo el tiempo justo para leer
- * o modificar los campos, nunca mientras hace trabajo pesado.
- */
+/* Guarda el avance de una tarea para que otros hilos puedan consultarlo. */
 #include "huffman.h"
 
-#include <time.h>      /* clock_gettime, struct timespec */
+#include <time.h>
 
+/* Inicializacion, cierre y actualizacion del avance. */
 void huff_progreso_iniciar(HuffProgreso *p)
 {
     if (p == NULL) return;
@@ -44,7 +37,7 @@ void huff_progreso_avanzar(HuffProgreso *p, uint64_t n)
     if (p == NULL) return;
     pthread_mutex_lock(&p->mutex);
     p->hechos += n;
-    pthread_cond_broadcast(&p->cambio);   /* despierta a quien muestra el avance */
+    pthread_cond_broadcast(&p->cambio);
     pthread_mutex_unlock(&p->mutex);
 }
 
@@ -90,7 +83,6 @@ int huff_progreso_esperar(HuffProgreso *p, int espera_ms)
 {
     if (p == NULL) return 1;
 
-    /* pthread_cond_timedwait recibe una hora absoluta, no una duracion. */
     struct timespec limite;
     clock_gettime(CLOCK_REALTIME, &limite);
     limite.tv_sec  += espera_ms / 1000;
@@ -103,14 +95,9 @@ int huff_progreso_esperar(HuffProgreso *p, int espera_ms)
     pthread_mutex_lock(&p->mutex);
     uint64_t hechos_antes = p->hechos;
 
-    /*
-     * El hilo duerme hasta que otro senale 'cambio' o se cumpla el plazo.
-     * Se usa while porque pthread_cond_timedwait puede despertar sin que
-     * nadie haya senalado (despertar espurio).
-     */
     while (!p->terminado && p->hechos == hechos_antes) {
         if (pthread_cond_timedwait(&p->cambio, &p->mutex, &limite) != 0) {
-            break;   /* se cumplio el plazo */
+            break;
         }
     }
     int terminado = p->terminado;

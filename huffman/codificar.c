@@ -1,78 +1,42 @@
-/*
- * codificar.c -- compresion concurrente por bloques con Huffman.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
- *
- * Etapas:
- *   1. Leer el archivo completo y dividirlo en bloques.
- *   2. [PARALELO] Cada hilo cuenta las frecuencias de los bloques que
- *      toma, cada uno en la tabla propia del bloque (reduccion local).
- *   3. Sumar las tablas locales en la tabla global (hilo principal).
- *   4. Construir un solo arbol y generar los codigos.
- *   5. Calcular cuantos bytes ocupara cada bloque comprimido y escribir
- *      el encabezado con esa tabla de tamanos.
- *   6. [PARALELO] Los hilos codifican bloques en cualquier orden mientras
- *      el hilo principal, como coordinador, escribe en el archivo cada
- *      bloque en orden (0, 1, 2...) apenas esta listo.
- *
- * Sincronizacion:
- *   - Etapa 2: cada bloque tiene su propia tabla de frecuencias, asi que
- *     ningun par de hilos escribe en la misma memoria y no se necesita
- *     mutex para contar. El pool_esperar (join) entre la etapa 2 y la 3
- *     garantiza que todas las tablas esten completas antes de sumarlas.
- *   - Etapa 6: el mutex 'mutex' protege los campos 'listo' de los bloques
- *     y 'error'. El escritor duerme en la variable de condicion
- *     'bloque_listo' hasta que el bloque que le toca este terminado; cada
- *     trabajador la senala al terminar un bloque. No hay espera activa.
- */
+/* Comprime el archivo por bloques usando varios hilos. */
 #include "huffman.h"
 
-#include <fcntl.h>     /* open, O_WRONLY, O_CREAT, O_TRUNC */
-#include <stdio.h>     /* fprintf, perror                  */
-#include <stdlib.h>    /* calloc, free                     */
-#include <unistd.h>    /* close, unlink                    */
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
-/* Estado de un bloque durante la compresion. */
+/* Datos de cada bloque y del trabajo compartido. */
 typedef struct {
-    const unsigned char *entrada;     /* inicio del bloque dentro del archivo original */
-    size_t               n_entrada;   /* bytes originales del bloque                   */
-    uint64_t             freq[HUFF_SIMBOLOS];   /* frecuencias de este bloque solamente */
-    unsigned char       *salida;      /* bytes comprimidos (calloc), NULL si no hay    */
-    size_t               n_salida;    /* bytes comprimidos del bloque                  */
-    int                  listo;       /* 1 cuando 'salida' ya esta completa            */
+    const unsigned char *entrada;
+    size_t               n_entrada;
+    uint64_t             freq[HUFF_SIMBOLOS];
+    unsigned char       *salida;
+    size_t               n_salida;
+    int                  listo;
 } Bloque;
 
-/* Datos que comparten el hilo coordinador y los hilos trabajadores. */
 typedef struct {
     Bloque         *bloques;
     uint64_t        n_bloques;
     Codigo          tabla[HUFF_SIMBOLOS];
     HuffProgreso   *progreso;
 
-    pthread_mutex_t mutex;          /* protege bloques[i].listo y 'error' */
-    pthread_cond_t  bloque_listo;   /* se senala al terminar cada bloque  */
-    int             error;          /* 1 si alguien fallo o se cancelo    */
+    pthread_mutex_t mutex;
+    pthread_cond_t  bloque_listo;
+    int             error;
 } Compresion;
 
-/* ------------------------------------------------------------------ */
-/* Codificacion de bits                                               */
-/* ------------------------------------------------------------------ */
-
-/*
- * Escribe en 'salida' el codigo de cada byte de 'entrada'.
- * Los bits se colocan de izquierda a derecha dentro de cada byte
- * (el primer bit va en la posicion 7). 'salida' debe venir llena de
- * ceros: solo se encienden los bits que valen 1.
- */
+/* Convierte los bytes originales en sus codigos de Huffman. */
 static void codificar_datos(const unsigned char *entrada, size_t n,
                             const Codigo tabla[HUFF_SIMBOLOS],
                             unsigned char *salida)
 {
-    uint64_t pos = 0;   /* numero del siguiente bit a escribir en 'salida' */
+    uint64_t pos = 0;
 
     for (size_t i = 0; i < n; i++) {
         Codigo c = tabla[entrada[i]];
 
-        /* Se recorren los bits del codigo del mas significativo al menos. */
         for (int b = c.largo - 1; b >= 0; b--) {
             if ((c.bits >> b) & 1) {
                 salida[pos / 8] |= (unsigned char)(0x80 >> (pos % 8));
@@ -82,11 +46,8 @@ static void codificar_datos(const unsigned char *entrada, size_t n,
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Tareas que ejecutan los hilos del pool                             */
-/* ------------------------------------------------------------------ */
+/* Tareas que ejecuta el pool para contar y codificar bloques. */
 
-/* Marca el error y despierta al escritor para que no espere para siempre. */
 static void avisar_error(Compresion *c)
 {
     pthread_mutex_lock(&c->mutex);
@@ -95,7 +56,6 @@ static void avisar_error(Compresion *c)
     pthread_mutex_unlock(&c->mutex);
 }
 
-/* Retorna 1 si hay que dejar de trabajar (error o cancelacion). */
 static int debe_parar(Compresion *c)
 {
     pthread_mutex_lock(&c->mutex);
@@ -104,7 +64,6 @@ static int debe_parar(Compresion *c)
     return error || huff_progreso_cancelado(c->progreso);
 }
 
-/* Etapa 2: frecuencias de un bloque, en la tabla propia del bloque. */
 static int tarea_contar(void *contexto, uint64_t i)
 {
     Compresion *c = contexto;
@@ -117,7 +76,6 @@ static int tarea_contar(void *contexto, uint64_t i)
     return 0;
 }
 
-/* Etapa 6: codificar un bloque y avisar al escritor que esta listo. */
 static int tarea_codificar(void *contexto, uint64_t i)
 {
     Compresion *c = contexto;
@@ -141,11 +99,8 @@ static int tarea_codificar(void *contexto, uint64_t i)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Escritura                                                          */
-/* ------------------------------------------------------------------ */
+/* Escritura del encabezado y de los bloques comprimidos. */
 
-/* Escribe el encabezado completo, incluida la tabla de tamanos. Retorna 0 o -1. */
 static int escribir_encabezado(int fd, uint64_t tam_original,
                                const uint64_t freq[HUFF_SIMBOLOS],
                                const Compresion *c)
@@ -166,12 +121,7 @@ static int escribir_encabezado(int fd, uint64_t tam_original,
     return 0;
 }
 
-/*
- * Hilo coordinador de la etapa 6: escribe los bloques en orden.
- * Si el bloque i todavia no esta listo, el hilo duerme en la variable de
- * condicion hasta que un trabajador lo termine. Los bloques que terminan
- * antes de su turno simplemente esperan en memoria.
- */
+/* Espera a que cada bloque este listo y lo escribe en el orden original. */
 static int escribir_en_orden(Compresion *c, int fd)
 {
     for (uint64_t i = 0; i < c->n_bloques; i++) {
@@ -186,15 +136,12 @@ static int escribir_en_orden(Compresion *c, int fd)
 
         if (error) return -1;
 
-        /* La escritura se hace fuera del mutex: el disco es lento y los
-           trabajadores no deben esperar por el. Ningun otro hilo toca
-           este bloque despues de marcarlo listo. */
         if (huff_escribir_todo(fd, b->salida, b->n_salida) < 0) {
             perror("write");
             avisar_error(c);
             return -1;
         }
-        free(b->salida);          /* ya esta en disco: se libera de una vez */
+        free(b->salida);
         b->salida = NULL;
 
         huff_progreso_avanzar(c->progreso, 1);
@@ -207,23 +154,16 @@ static int escribir_en_orden(Compresion *c, int fd)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Funcion publica                                                    */
-/* ------------------------------------------------------------------ */
+/* Proceso completo de compresion. */
 
 int huff_comprimir(const char *ruta_entrada, const char *ruta_salida,
                    int n_hilos, HuffProgreso *progreso)
 {
-    /*
-     * Todos los recursos se declaran al inicio en un estado "vacio".
-     * Ante cualquier error se salta a 'fin', donde se libera solo lo
-     * que alcanzo a reservarse. Asi no hay fugas en ningun camino.
-     */
     unsigned char *entrada   = NULL;
     Nodo          *raiz      = NULL;
     int            fd        = -1;
     int            resultado = -1;
-    int            sync_ok   = 0;    /* 1 si se inicializaron mutex y cond */
+    int            sync_ok   = 0;
 
     Compresion c = { 0 };
     c.progreso = progreso;
@@ -233,11 +173,11 @@ int huff_comprimir(const char *ruta_entrada, const char *ruta_salida,
     size_t   n = 0;
     uint64_t freq[HUFF_SIMBOLOS] = {0};
 
-    /* 1. Leer el archivo y dividirlo en bloques. */
+    /* Leer el archivo y preparar sus bloques. */
     if (huff_leer_archivo(ruta_entrada, &entrada, &n) < 0) {
         goto fin;
     }
-    c.n_bloques = (n + HUFF_TAM_BLOQUE - 1) / HUFF_TAM_BLOQUE;   /* redondeo hacia arriba */
+    c.n_bloques = (n + HUFF_TAM_BLOQUE - 1) / HUFF_TAM_BLOQUE;
 
     c.bloques = calloc(c.n_bloques > 0 ? c.n_bloques : 1, sizeof(Bloque));
     if (c.bloques == NULL) {
@@ -254,22 +194,20 @@ int huff_comprimir(const char *ruta_entrada, const char *ruta_salida,
     pthread_cond_init(&c.bloque_listo, NULL);
     sync_ok = 1;
 
-    /* Avance total: cada bloque se cuenta una vez y se escribe una vez. */
     huff_progreso_fijar_total(progreso, 2 * c.n_bloques);
 
-    /* 2. Frecuencias locales en paralelo. El join es la barrera. */
+    /* Contar frecuencias por bloque y sumarlas. */
     if (pool_ejecutar(n_hilos, c.n_bloques, tarea_contar, &c) < 0) {
         goto fin;
     }
 
-    /* 3. Reduccion: el total es la suma de las tablas locales. */
     for (uint64_t i = 0; i < c.n_bloques; i++) {
         for (int s = 0; s < HUFF_SIMBOLOS; s++) {
             freq[s] += c.bloques[i].freq[s];
         }
     }
 
-    /* 4. Un solo arbol para todo el archivo. */
+    /* Crear el arbol y calcular los codigos que se usaran. */
     raiz = construir_arbol(freq);
     if (raiz == NULL && n > 0) {
         fprintf(stderr, "Error: no hay memoria para el arbol\n");
@@ -285,8 +223,7 @@ int huff_comprimir(const char *ruta_entrada, const char *ruta_salida,
         }
     }
 
-    /* 5. Tamano de cada bloque comprimido: freq[s] apariciones de
-          tabla[s].largo bits cada una, redondeado a bytes completos. */
+    /* Calcular el espacio necesario para cada bloque comprimido. */
     for (uint64_t i = 0; i < c.n_bloques; i++) {
         uint64_t bits = 0;
         for (int s = 0; s < HUFF_SIMBOLOS; s++) {
@@ -305,12 +242,12 @@ int huff_comprimir(const char *ruta_entrada, const char *ruta_salida,
         goto fin;
     }
 
-    /* 6. Los trabajadores codifican mientras este hilo escribe en orden. */
+    /* Codificar en paralelo y guardar los bloques en orden. */
     if (pool_iniciar(&pool, n_hilos, c.n_bloques, tarea_codificar, &c) < 0) {
         goto fin;
     }
     r_escritor = escribir_en_orden(&c, fd);
-    r_pool     = pool_esperar(&pool);   /* join de todos los trabajadores */
+    r_pool     = pool_esperar(&pool);
     if (r_escritor < 0 || r_pool < 0) {
         goto fin;
     }
@@ -321,12 +258,12 @@ fin:
     if (fd >= 0) {
         close(fd);
         if (resultado < 0) {
-            unlink(ruta_salida);   /* no se deja un .huff a medias */
+            unlink(ruta_salida);
         }
     }
     if (c.bloques != NULL) {
         for (uint64_t i = 0; i < c.n_bloques; i++) {
-            free(c.bloques[i].salida);   /* free(NULL) no hace nada, es seguro */
+            free(c.bloques[i].salida);
         }
         free(c.bloques);
     }

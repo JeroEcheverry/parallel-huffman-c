@@ -1,21 +1,10 @@
-/*
- * arbol.c -- construccion del arbol de Huffman y tabla de codigos.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
- *
- * Misma logica de huffman_tree.cpp (version C++ del curso de Estructuras
- * de Datos): se crea una hoja por simbolo y se combinan repetidamente los
- * dos nodos de menor frecuencia hasta que queda uno solo, la raiz.
- */
+/* Construccion del arbol de Huffman y de los codigos para cada byte. */
 #include "huffman.h"
 
-#include <stdlib.h>   /* malloc, free */
-#include <string.h>   /* memset       */
+#include <stdlib.h>
+#include <string.h>
 
-/* ------------------------------------------------------------------ */
-/* Funciones auxiliares (solo se usan dentro de este archivo)         */
-/* ------------------------------------------------------------------ */
-
-/* Reserva e inicializa un nodo. Retorna NULL si no hay memoria. */
+/* Funciones auxiliares para armar y recorrer el arbol. */
 static Nodo *crear_nodo(int simbolo, uint64_t frecuencia, Nodo *izq, Nodo *der)
 {
     Nodo *nodo = malloc(sizeof(Nodo));
@@ -29,15 +18,6 @@ static Nodo *crear_nodo(int simbolo, uint64_t frecuencia, Nodo *izq, Nodo *der)
     return nodo;
 }
 
-/*
- * Saca del arreglo el nodo de menor frecuencia y lo retorna.
- * Equivale a findMinIndex + erase de la version C++.
- *
- * Si hay empate gana el primero que aparece en el arreglo. Como el
- * arreglo siempre se llena en el mismo orden (simbolos de 0 a 255),
- * el compresor y el descompresor toman las mismas decisiones y
- * construyen exactamente el mismo arbol.
- */
 static Nodo *sacar_minimo(Nodo *nodos[], int *n)
 {
     int min = 0;
@@ -49,7 +29,6 @@ static Nodo *sacar_minimo(Nodo *nodos[], int *n)
 
     Nodo *resultado = nodos[min];
 
-    /* Se corren una posicion a la izquierda los nodos que estaban despues. */
     for (int i = min; i < *n - 1; i++) {
         nodos[i] = nodos[i + 1];
     }
@@ -58,14 +37,7 @@ static Nodo *sacar_minimo(Nodo *nodos[], int *n)
     return resultado;
 }
 
-/*
- * Recorre el arbol en preorden armando el codigo de cada hoja.
- * Bajar a la izquierda agrega un 0 al final del codigo y bajar a la
- * derecha agrega un 1:
- *
- *   bits << 1        -> corre los bits y deja un 0 al final
- *   (bits << 1) | 1  -> corre los bits y deja un 1 al final
- */
+/* Asigna un codigo a cada simbolo siguiendo las ramas del arbol. */
 static void recorrer(const Nodo *nodo, uint64_t bits, int largo,
                      Codigo tabla[HUFF_SIMBOLOS])
 {
@@ -78,9 +50,7 @@ static void recorrer(const Nodo *nodo, uint64_t bits, int largo,
     recorrer(nodo->der, (bits << 1) | 1, largo + 1, tabla);
 }
 
-/* ------------------------------------------------------------------ */
-/* Funciones publicas                                                 */
-/* ------------------------------------------------------------------ */
+/* Funciones principales del arbol de Huffman. */
 
 /*
  * Retorna NULL en dos casos: archivo vacio (todas las frecuencias en
@@ -92,7 +62,7 @@ Nodo *construir_arbol(const uint64_t freq[HUFF_SIMBOLOS])
     Nodo *nodos[HUFF_SIMBOLOS];
     int n = 0;
 
-    /* Paso 1: una hoja por cada simbolo que aparece en el archivo. */
+    /* Crea una hoja para cada simbolo que aparece. */
     for (int s = 0; s < HUFF_SIMBOLOS; s++) {
         if (freq[s] == 0) {
             continue;
@@ -109,12 +79,11 @@ Nodo *construir_arbol(const uint64_t freq[HUFF_SIMBOLOS])
         return NULL;
     }
 
-    /* Paso 2: combinar los dos de menor frecuencia hasta que quede uno. */
+    /* Combina los nodos menos frecuentes hasta formar la raiz. */
     while (n > 1) {
         Nodo *izq = sacar_minimo(nodos, &n);
         Nodo *der = sacar_minimo(nodos, &n);
 
-        /* Los nodos internos no representan un simbolo: se marcan con -1. */
         Nodo *padre = crear_nodo(-1, izq->frecuencia + der->frecuencia, izq, der);
         if (padre == NULL) {
             liberar_arbol(izq);
@@ -131,19 +100,13 @@ Nodo *construir_arbol(const uint64_t freq[HUFF_SIMBOLOS])
 
 void generar_codigos(const Nodo *raiz, Codigo tabla[HUFF_SIMBOLOS])
 {
-    /* largo = 0 en todos: ningun simbolo tiene codigo hasta que se asigne. */
     memset(tabla, 0, sizeof(Codigo) * HUFF_SIMBOLOS);
 
     if (raiz == NULL) {
         return;
     }
 
-    /*
-     * Caso especial: el archivo tiene un solo simbolo distinto (ej. "aaaa").
-     * El arbol es una sola hoja y el recorrido le daria un codigo de largo 0,
-     * que no se puede escribir. Se le asigna el codigo "0", igual que en la
-     * version C++.
-     */
+    /* Si solo aparece un simbolo, se le asigna el codigo 0. */
     if (raiz->izq == NULL && raiz->der == NULL) {
         tabla[raiz->simbolo].bits  = 0;
         tabla[raiz->simbolo].largo = 1;

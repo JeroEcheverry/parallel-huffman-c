@@ -115,9 +115,5 @@ editor/    editor del Parcial 1 + fondo.c (tareas en segundo plano)
 pruebas/   verificar.sh, prueba_editor.sh, benchmark.sh
 ```
 
-<<<<<<< HEAD
 Universidad EAFIT, Sistemas Operativos SO2026B.
 
-=======
-Universidad EAFIT, Sistemas Operativos SO2026B.
->>>>>>> ae7335e (Cambio en el editor de texto)
