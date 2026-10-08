@@ -1,32 +1,15 @@
-/*
- * archivo.c -- apertura, indexado y lectura del archivo.
- *
- * Las operaciones que modifican el archivo (anadir, insertar, borrar) estan
- * en edicion.c. Aqui solo se abre, cierra, indexa y lee.
- *
- * No se usa fopen/fread/fwrite/fclose en ningun punto, tal como pide el
- * enunciado: todo se hace con open/read/write/lseek/close.
- */
+/* Apertura, lectura e indice de lineas del archivo. */
 
 #include "editor.h"
 
-#include <fcntl.h>      /* open, O_RDWR, O_CREAT                */
-#include <unistd.h>     /* read, write, lseek, ftruncate, close */
-#include <stdio.h>      /* perror, printf, fflush               */
-#include <stdlib.h>     /* malloc, realloc, free                */
-#include <string.h>     /* memcpy, strncpy, strlen              */
-#include <errno.h>      /* errno, EINTR                         */
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 
-/* ---------------------------------------------------------------- */
-/* Utilidades de entrada/salida                                      */
-/* ---------------------------------------------------------------- */
-
-/*
- * read/write pueden leer o escribir menos bytes de los pedidos sin que sea
- * un error, y si una senal interrumpe la llamada devuelven -1 con
- * errno == EINTR. Estas dos funciones repiten la operacion hasta completar
- * 'n' bytes (o llegar al fin del archivo) y reintentan ante EINTR.
- */
+/* Lectura y escritura del archivo. */
 
 ssize_t leer_exacto(int fd, void *buf, size_t n)
 {
@@ -41,7 +24,7 @@ ssize_t leer_exacto(int fd, void *buf, size_t n)
             perror("read");
             return -1;
         }
-        if (r == 0) break;   /* fin del archivo */
+        if (r == 0) break;
 
         total += (size_t)r;
     }
@@ -66,13 +49,11 @@ ssize_t escribir_todo(int fd, const void *buf, size_t n)
     return (ssize_t)total;
 }
 
-/* ---------------------------------------------------------------- */
-/* Ciclo de vida del editor                                          */
-/* ---------------------------------------------------------------- */
+/* Preparacion del editor y manejo del archivo abierto. */
 
 void ed_init(Editor *ed)
 {
-    ed->fd       = -1;   /* -1 = no hay archivo abierto */
+    ed->fd       = -1;
     ed->ruta[0]  = '\0';
     ed->lineas   = NULL;
     ed->n_lineas = 0;
@@ -90,7 +71,6 @@ int ed_esta_abierto(const Editor *ed)
     return ed->fd >= 0;
 }
 
-/* Abre 'ruta' (la crea si no existe) y construye el indice de lineas. */
 int ed_abrir(Editor *ed, const char *ruta)
 {
     if (ed_esta_abierto(ed)) {
@@ -125,7 +105,6 @@ int ed_abrir(Editor *ed, const char *ruta)
     return 0;
 }
 
-/* Cierra el descriptor y libera el indice. Se puede llamar varias veces. */
 int ed_cerrar(Editor *ed)
 {
     int r = 0;
@@ -151,11 +130,7 @@ int ed_cerrar(Editor *ed)
     return r;
 }
 
-/* ---------------------------------------------------------------- */
-/* Indice de lineas                                                   */
-/* ---------------------------------------------------------------- */
-
-/* Agrega una entrada al indice, duplicando la capacidad si se llena. */
+/* Indice con la posicion y el largo de cada linea. */
 static int indice_agregar(Editor *ed, off_t offset, size_t largo)
 {
     if (ed->n_lineas == ed->cap) {
@@ -176,11 +151,6 @@ static int indice_agregar(Editor *ed, off_t offset, size_t largo)
     return 0;
 }
 
-/*
- * Reconstruye el indice recorriendo el archivo de principio a fin y
- * anotando el offset y el largo de cada linea (separadas por '\n').
- * Se llama al abrir el archivo y despues de cada modificacion.
- */
 int ed_indexar(Editor *ed)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -194,8 +164,8 @@ int ed_indexar(Editor *ed)
     ed->n_lineas = 0;
 
     char    bloque[ED_BLOQUE];
-    off_t   pos    = 0;   /* offset absoluto del inicio del bloque */
-    off_t   inicio = 0;   /* offset donde empieza la linea actual  */
+    off_t   pos    = 0;
+    off_t   inicio = 0;
     ssize_t leidos;
 
     while ((leidos = read(ed->fd, bloque, sizeof(bloque))) > 0) {
@@ -213,7 +183,6 @@ int ed_indexar(Editor *ed)
 
     if (leidos == -1) { perror("read"); return -1; }
 
-    /* Ultima linea sin '\n' final */
     if (inicio < ed->tam) {
         if (indice_agregar(ed, inicio, (size_t)(ed->tam - inicio)) == -1) return -1;
     }
@@ -221,11 +190,7 @@ int ed_indexar(Editor *ed)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* Operaciones sobre lineas                                           */
-/* ---------------------------------------------------------------- */
-
-/* Escribe la linea 'idx' (base 0) en STDOUT, leyendo por bloques. */
+/* Mostrar y copiar lineas del archivo. */
 int ed_imprimir_linea(Editor *ed, size_t idx)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -235,7 +200,7 @@ int ed_imprimir_linea(Editor *ed, size_t idx)
     int    termina_en_salto = 0;
     char   bloque[ED_BLOQUE];
 
-    fflush(stdout);   /* printf usa buffer propio; hay que vaciarlo antes de usar write */
+    fflush(stdout);
 
     if (lseek(ed->fd, ed->lineas[idx].offset, SEEK_SET) == -1) {
         perror("lseek");
@@ -254,7 +219,6 @@ int ed_imprimir_linea(Editor *ed, size_t idx)
         restante -= (size_t)leidos;
     }
 
-    /* La ultima linea puede no traer '\n'; se agrega para no pegar el prompt */
     if (!termina_en_salto) {
         if (escribir_todo(1, "\n", 1) == -1) return -1;
     }
@@ -262,10 +226,6 @@ int ed_imprimir_linea(Editor *ed, size_t idx)
     return 0;
 }
 
-/*
- * Copia la linea 'idx' (base 0) a un buffer nuevo (malloc), sin el '\n'
- * final y terminado en '\0'. El llamador debe liberarlo con free().
- */
 char *ed_linea_a_memoria(Editor *ed, size_t idx, size_t *largo_out)
 {
     if (!ed_esta_abierto(ed)) return NULL;

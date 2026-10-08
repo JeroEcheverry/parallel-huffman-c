@@ -1,20 +1,4 @@
-/*
- * repl.c -- bucle interactivo y despacho de comandos del editor.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 1
- *
- * Ciclo lectura-evaluacion-impresion: lee una linea con fgets, toma el
- * primer caracter como comando y el resto como argumento, ejecuta el
- * manejador correspondiente y repite hasta 'q' o Ctrl+D.
- *
- * El bucle esta en editor_ejecutar (no en main) para poder llamarlo tanto
- * desde main.c (programa independiente) como desde cat_edicion.c (shell
- * eafitOS).
- *
- * Parcial 2: cada comando declara si lee o modifica el archivo abierto.
- * Antes de ejecutarlo se intenta tomar el cerrojo de lectores-escritores
- * sin bloquear; si una tarea en segundo plano lo tiene, el comando se
- * rechaza con un mensaje y el editor sigue respondiendo.
- */
+/* Lee los comandos del usuario y los ejecuta mientras el editor esta abierto. */
 #include "editor.h"
 
 #include <stdio.h>
@@ -25,12 +9,7 @@
 
 #define MAX_ENTRADA 8192
 
-/* ---------------------------------------------------------------- */
-/* Tabla de comandos                                                   */
-/* ---------------------------------------------------------------- */
-/* Mismo patron del shell de la asignatura: tabla de punteros a funcion
-   en vez de una cadena de if/else. Agregar un comando es escribir su
-   manejador y anadir una fila aqui. */
+/* Cada comando tiene su descripcion, acceso al archivo y funcion. */
 
 typedef int (*Manejador)(Editor *ed, const char *arg);
 
@@ -38,12 +17,10 @@ typedef struct {
     char        clave;
     const char *uso;
     const char *descripcion;
-    Acceso      acceso;     /* que cerrojo necesita sobre el archivo abierto */
+    Acceso      acceso;
     Manejador   fn;
 } ComandoEd;
 
-/* 'o' es escritor aunque no cambie el contenido: cambia cual es el archivo
-   abierto (ed->fd, ed->ruta), y eso tambien lo usa la tarea en segundo plano. */
 static const ComandoEd tabla[] = {
     { 'o', "o <archivo>",  "Abre un archivo (lo crea si no existe).",   ACCESO_ESCRITOR, cmd_o },
     { 'p', "p [n]",        "Imprime la linea n, o todo el archivo.",    ACCESO_LECTOR,   cmd_p },
@@ -74,14 +51,7 @@ static void mostrar_ayuda(void)
     printf("\n");
 }
 
-/*
- * Separa el comando (primer caracter) de su argumento. A diferencia del
- * shell de la asignatura, aqui no se tokeniza: todo lo que sigue al
- * comando es el argumento tal cual, para que 'a hola mundo' conserve los
- * espacios (mismo comportamiento que el editor ed de Unix).
- *
- * Nunca devuelve NULL: si no hay argumento, apunta al terminador nulo.
- */
+/* Prepara el argumento que se pasa al comando. */
 static char *separar_argumento(char *linea)
 {
     char *p = linea + 1;
@@ -89,7 +59,6 @@ static char *separar_argumento(char *linea)
     return p;
 }
 
-/* Quita el salto de linea que deja fgets al final de la cadena. */
 static void quitar_salto(char *s)
 {
     size_t n = strlen(s);
@@ -98,11 +67,7 @@ static void quitar_salto(char *s)
     }
 }
 
-/*
- * Bucle principal del editor. 'ruta_inicial' es el archivo a abrir al
- * arrancar, o NULL para empezar sin archivo. Libera todos los recursos
- * antes de retornar (incluida la tarea en segundo plano). Siempre retorna 0.
- */
+/* Bucle principal: recibe comandos y cierra los recursos al salir. */
 int editor_ejecutar(const char *ruta_inicial)
 {
     Editor ed;
@@ -118,7 +83,6 @@ int editor_ejecutar(const char *ruta_inicial)
     }
 
     while (1) {
-        /* Antes de cada prompt: informar si la tarea termino y atender Ctrl+C. */
         fondo_revisar(&ed);
         if (fondo_hubo_senal()) {
             fondo_atender_senal(&ed);
@@ -126,14 +90,13 @@ int editor_ejecutar(const char *ruta_inicial)
 
         fondo_texto_prompt(&ed, prompt, sizeof(prompt));
         printf("%s", prompt);
-        fflush(stdout);   /* el prompt no lleva '\n', hay que forzar el vaciado */
+        fflush(stdout);
 
         if (fgets(entrada, sizeof(entrada), stdin) == NULL) {
-            /* Ctrl+C interrumpe la lectura (errno == EINTR): no es fin de archivo. */
             if (ferror(stdin) && errno == EINTR) {
                 clearerr(stdin);
                 printf("\n");
-                continue;   /* la senal se atiende al inicio del ciclo */
+                continue;
             }
             printf("\n");
             break;
@@ -160,7 +123,6 @@ int editor_ejecutar(const char *ruta_inicial)
             if (tabla[i].clave == clave) {
                 encontrado = 1;
 
-                /* Lectores-escritores: el cerrojo se intenta sin bloquear. */
                 if (fondo_tomar_cerrojo(&ed, tabla[i].acceso) == -1) {
                     printf("Archivo ocupado por la tarea en segundo plano: '%c' %s."
                            " Intenta cuando termine ('e' muestra el progreso).\n",
@@ -179,7 +141,6 @@ int editor_ejecutar(const char *ruta_inicial)
         }
     }
 
-    /* Primero se cancela y espera la tarea (join); despues se cierra el archivo. */
     fondo_finalizar(&ed);
     ed_cerrar(&ed);
     fondo_destruir(&ed);

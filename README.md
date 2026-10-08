@@ -4,6 +4,13 @@ Compresor de archivos con **codificación de Huffman concurrente** en C, integra
 
 Proyecto del Parcial 2 de Sistemas Operativos (SO2026B), Universidad EAFIT: concurrencia y sincronización con `pthread`, mutex, variables de condición y cerrojos de lectores-escritores.
 
+## Antecedentes
+
+Este proyecto parte de dos trabajos previos:
+
+Compresor Huffman secuencial en C++, proyecto final de la materia Estructuras de Datos y Algoritmos: JeroEcheverry/Compresor-De-Archivos-Huffman. De ahí se tomaron el algoritmo de construcción del árbol, la generación de códigos y el orden de los bits; aquí se reescribió en C y se paralelizó.
+Editor de texto en Unix, Parcial 1 de Sistemas Operativos: JeroEcheverry/Editor-de-texto-en-Unix. Se integró sin cambiar su arquitectura (carpeta editor/).
+
 ## Compilar y usar
 
 Requiere Linux (o WSL) con `gcc` y `make`.
@@ -108,5 +115,9 @@ editor/    editor del Parcial 1 + fondo.c (tareas en segundo plano)
 pruebas/   verificar.sh, prueba_editor.sh, benchmark.sh
 ```
 
+<<<<<<< HEAD
 Universidad EAFIT, Sistemas Operativos SO2026B.
 
+=======
+Universidad EAFIT, Sistemas Operativos SO2026B.
+>>>>>>> ae7335e (Cambio en el editor de texto)

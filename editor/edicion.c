@@ -1,25 +1,13 @@
-/*
- * edicion.c -- operaciones que modifican el archivo: anadir, insertar,
- * borrar. El kernel no tiene una syscall que inserte o quite bytes en
- * medio de un archivo, asi que hay que desplazar a mano los bytes que
- * quedan despues y ajustar el tamano con ftruncate.
- */
+/* Funciones para agregar, insertar y borrar lineas del archivo. */
 
 #include "editor.h"
 
-#include <unistd.h>     /* read, write, lseek, ftruncate */
-#include <stdio.h>      /* perror                        */
-#include <stdlib.h>     /* malloc, free                  */
-#include <string.h>     /* memcpy, strlen                */
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-/* ---------------------------------------------------------------- */
-/* a <texto>  --  anadir una linea al final                           */
-/* ---------------------------------------------------------------- */
-
-/*
- * Anade 'texto' como nueva linea al final. Si el archivo no termina en
- * '\n' se antepone uno para que el texto no quede pegado a la ultima linea.
- */
+/* Agregar una linea al final del archivo. */
 int ed_anexar(Editor *ed, const char *texto)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -63,22 +51,7 @@ int ed_anexar(Editor *ed, const char *texto)
     return ed_indexar(ed);
 }
 
-/* ---------------------------------------------------------------- */
-/* i <n> <texto>  --  insertar una linea en una posicion arbitraria    */
-/* ---------------------------------------------------------------- */
-
-/*
- * Inserta 'texto' como nueva linea en 'idx' (base 0), desplazando hacia
- * adelante esa linea y las siguientes.
- *
- * Si 'idx' es igual al numero de lineas, equivale a anadir al final y se
- * delega en ed_anexar.
- *
- * Para abrir el hueco, la region [off, tam) se copia hacia adelante desde
- * el final hacia el principio, porque origen y destino se solapan (igual
- * razon por la que memmove existe junto a memcpy). No hace falta
- * ftruncate: el archivo crece solo al escribir mas alla de su ultimo byte.
- */
+/* Insertar una linea en la posicion indicada. */
 int ed_insertar(Editor *ed, size_t idx, const char *texto)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -90,9 +63,7 @@ int ed_insertar(Editor *ed, size_t idx, const char *texto)
 
     off_t  off   = ed->lineas[idx].offset;
     size_t largo = strlen(texto);
-    size_t hueco = largo + 1;   /* texto + '\n' */
-
-    /* desplazar la cola hacia adelante, de atras hacia adelante */
+    size_t hueco = largo + 1;
 
     char  bloque[ED_BLOQUE];
     off_t fin = ed->tam;
@@ -111,8 +82,6 @@ int ed_insertar(Editor *ed, size_t idx, const char *texto)
 
         fin = src;
     }
-
-    /* escribir la linea nueva en el hueco */
 
     char *buf = malloc(hueco);
     if (buf == NULL) {
@@ -137,16 +106,7 @@ int ed_insertar(Editor *ed, size_t idx, const char *texto)
     return ed_indexar(ed);
 }
 
-/* ---------------------------------------------------------------- */
-/* d <n>  --  borrar una linea                                        */
-/* ---------------------------------------------------------------- */
-
-/*
- * Borra la linea 'idx' (base 0): desplaza los bytes posteriores hacia
- * atras (sobrescribiendo la linea eliminada) y recorta el archivo con
- * ftruncate. Aqui el destino queda detras del origen, asi que el
- * recorrido va de principio a fin (direccion opuesta a ed_insertar).
- */
+/* Borrar una linea y actualizar el indice del archivo. */
 int ed_borrar_linea(Editor *ed, size_t idx)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -175,7 +135,6 @@ int ed_borrar_linea(Editor *ed, size_t idx)
         dst += leidos;
     }
 
-    /* recorta la copia sobrante del final */
     off_t nuevo_tam = ed->tam - (off_t)largo;
     if (ftruncate(ed->fd, nuevo_tam) == -1) {
         perror("ftruncate");

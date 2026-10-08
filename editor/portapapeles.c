@@ -1,17 +1,11 @@
-/*
- * portapapeles.c -- comandos 'y' (copiar) y 'x' (pegar).
- *
- * El portapapeles es un buffer (malloc) dentro de la struct Editor que
- * guarda una sola linea, igual que el registro de borrado de vi. Se
- * conserva entre comandos y se libera al cerrar el archivo.
- */
+/* Funciones para copiar una linea y pegarla en otra posicion. */
 
 #include "editor.h"
 
-#include <stdio.h>    /* printf */
-#include <stdlib.h>   /* free   */
+#include <stdio.h>
+#include <stdlib.h>
 
-/* Libera el portapapeles y lo deja vacio. Seguro de llamar si ya lo esta. */
+/* Portapapeles: copiar y pegar lineas. */
 void ed_portapapeles_liberar(Editor *ed)
 {
     free(ed->portapapeles);
@@ -19,15 +13,6 @@ void ed_portapapeles_liberar(Editor *ed)
     ed->portapapeles_largo = 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* y <n>  --  copiar la linea n al portapapeles                       */
-/* ---------------------------------------------------------------- */
-
-/*
- * Copia la linea 'idx' (base 0) al portapapeles, reemplazando lo que
- * hubiera antes. Se guarda sin el '\n' final, que ed_insertar vuelve a
- * poner al pegar.
- */
 int ed_copiar(Editor *ed, size_t idx)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -45,15 +30,6 @@ int ed_copiar(Editor *ed, size_t idx)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* x <n>  --  pegar el portapapeles como nueva linea n                */
-/* ---------------------------------------------------------------- */
-
-/*
- * Inserta el contenido del portapapeles como nueva linea en 'idx'
- * (base 0). Se delega en ed_insertar; el portapapeles no se vacia, asi
- * que la misma linea se puede pegar varias veces.
- */
 int ed_pegar(Editor *ed, size_t idx)
 {
     if (!ed_esta_abierto(ed)) return -1;

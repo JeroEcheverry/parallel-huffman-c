@@ -1,47 +1,15 @@
-/*
- * fondo.c -- compresion y descompresion en segundo plano dentro del editor.
- * Universidad EAFIT - Sistemas Operativos (SO2026B) - Parcial 2
- *
- * Comandos nuevos:
- *   c [salida.huff]            comprime el archivo abierto
- *   k <entrada.huff> <salida>  descomprime (la salida puede ser el archivo abierto)
- *   e [v]                      muestra el progreso (v: en vivo, hasta que termine)
- *
- * Hilos que intervienen:
- *   - Hilo principal: el bucle del editor (repl.c). Nunca se bloquea
- *     esperando el archivo: si esta ocupado, el comando se rechaza.
- *   - Hilo de la tarea: uno por compresion/descompresion. Llama al modulo
- *     Huffman, que a su vez crea su propio pool de hilos trabajadores.
- *
- * Proteccion del archivo abierto (lectores-escritores con pthread_rwlock):
- *   - Comprimir LEE el archivo: la tarea toma el cerrojo de lectura durante
- *     toda la compresion. Los comandos que solo leen (p, s, m, y) pueden
- *     seguir usandose; los que modifican (a, d, i, x, u, r, o) se rechazan.
- *   - Descomprimir sobre el archivo abierto lo MODIFICA: primero se
- *     descomprime a un archivo temporal sin cerrojo, y solo para reemplazar
- *     el contenido se toma el cerrojo de escritura (unos milisegundos).
- *   - El hilo principal usa tryrdlock/trywrlock: si el cerrojo no esta
- *     disponible, retorna EBUSY de inmediato en vez de dormir, y la
- *     interfaz nunca se congela.
- */
+/* Manejo de compresion y descompresion en segundo plano. */
 #include "editor.h"
 
-#include <errno.h>      /* EBUSY                         */
-#include <signal.h>     /* sigaction, pthread_sigmask    */
-#include <stdio.h>      /* printf, snprintf, perror      */
-#include <string.h>     /* strncpy, strcmp, strerror     */
-#include <sys/stat.h>   /* stat, fstat                   */
-#include <unistd.h>     /* unlink                        */
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/* Senales                                                            */
-/* ------------------------------------------------------------------ */
+/* Recepcion de Ctrl+C. */
 
-/*
- * El manejador de una senal solo puede hacer operaciones muy simples
- * (no printf, no malloc, no mutex). Por eso solo enciende esta bandera;
- * el bucle del editor la revisa y actua fuera del manejador.
- */
 static volatile sig_atomic_t senal_recibida = 0;
 
 static void manejador_sigint(int senal)
@@ -56,8 +24,6 @@ void fondo_instalar_senales(void)
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = manejador_sigint;
     sigemptyset(&sa.sa_mask);
-    /* Sin SA_RESTART: si llega Ctrl+C mientras fgets espera, la lectura se
-       interrumpe y el bucle del editor puede atender la senal de una vez. */
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
 }
@@ -71,15 +37,7 @@ int fondo_hubo_senal(void)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Utilidades                                                         */
-/* ------------------------------------------------------------------ */
-
-/*
- * Retorna 1 si 'ruta' es el mismo archivo que esta abierto en el editor.
- * Se comparan dispositivo e inodo (y no el texto de la ruta) porque
- * "notas.txt" y "./notas.txt" son el mismo archivo.
- */
+/* Funciones auxiliares para identificar y mostrar el estado de las tareas. */
 static int es_el_archivo_abierto(const Editor *ed, const char *ruta)
 {
     if (!ed_esta_abierto(ed)) return 0;
@@ -90,7 +48,6 @@ static int es_el_archivo_abierto(const Editor *ed, const char *ruta)
     return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
 }
 
-/* Retorna 1 si dos rutas existentes son el mismo archivo. */
 static int mismo_archivo(const char *r1, const char *r2)
 {
     struct stat a, b;
@@ -98,7 +55,6 @@ static int mismo_archivo(const char *r1, const char *r2)
     return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
 }
 
-/* Porcentaje de avance de la tarea (0..100). */
 static int porcentaje(TareaFondo *t)
 {
     uint64_t hechos = 0, total = 0;
@@ -109,7 +65,6 @@ static int porcentaje(TareaFondo *t)
     return (int)(hechos * 100 / total);
 }
 
-/* Retorna 1 si el hilo de la tarea ya termino su trabajo. */
 static int tarea_terminada(TareaFondo *t)
 {
     pthread_mutex_lock(&t->mutex);
@@ -118,7 +73,6 @@ static int tarea_terminada(TareaFondo *t)
     return terminada;
 }
 
-/* Duerme hasta que el hilo de la tarea termine (sin espera activa). */
 static void esperar_fin_tarea(TareaFondo *t)
 {
     pthread_mutex_lock(&t->mutex);
@@ -128,7 +82,6 @@ static void esperar_fin_tarea(TareaFondo *t)
     pthread_mutex_unlock(&t->mutex);
 }
 
-/* Imprime una linea de estado con barra de progreso, terminada en 'fin'. */
 static void imprimir_estado(TareaFondo *t, const char *fin)
 {
     int  pct = porcentaje(t);
@@ -146,11 +99,8 @@ static void imprimir_estado(TareaFondo *t, const char *fin)
     fflush(stdout);
 }
 
-/* ------------------------------------------------------------------ */
-/* Hilo de la tarea                                                   */
-/* ------------------------------------------------------------------ */
+/* Ejecucion de compresion o descompresion en otro hilo. */
 
-/* Avisa al hilo principal que la tarea ya arranco (y ya tiene su cerrojo). */
 static void avisar_arranque(TareaFondo *t)
 {
     pthread_mutex_lock(&t->mutex);
@@ -159,23 +109,13 @@ static void avisar_arranque(TareaFondo *t)
     pthread_mutex_unlock(&t->mutex);
 }
 
-/*
- * Descompresion en dos pasos:
- *   1. Sin cerrojo, hacia "<destino>.parcial": nadie mas usa ese archivo.
- *   2. Con cerrojo de escritura, se coloca el resultado: si el destino es
- *      el archivo abierto se reemplaza su contenido (queda en el historial
- *      y se puede deshacer); si no, se renombra el temporal al destino.
- * La comprobacion "es el archivo abierto?" se hace con el cerrojo tomado:
- * asi el usuario no puede abrir otro archivo entre la comprobacion y el
- * reemplazo.
- */
 static int descomprimir_en_fondo(Editor *ed, TareaFondo *t)
 {
     char temporal[ED_MAX_RUTA + 16];
     snprintf(temporal, sizeof(temporal), "%s.parcial", t->destino);
 
     if (huff_descomprimir(t->origen, temporal, 0, &t->progreso) < 0) {
-        return -1;   /* huff_descomprimir ya borro el temporal incompleto */
+        return -1;
     }
 
     int r;
@@ -197,7 +137,6 @@ static int descomprimir_en_fondo(Editor *ed, TareaFondo *t)
     return r;
 }
 
-/* Funcion que ejecuta el hilo de la tarea. */
 static void *hilo_tarea(void *arg)
 {
     Editor     *ed = arg;
@@ -205,7 +144,6 @@ static void *hilo_tarea(void *arg)
     int         r;
 
     if (t->tipo == 'c') {
-        /* Lector: mientras se comprime nadie puede modificar el archivo. */
         pthread_rwlock_rdlock(&ed->cerrojo);
         avisar_arranque(t);
         r = huff_comprimir(t->origen, t->destino, 0, &t->progreso);
@@ -223,12 +161,7 @@ static void *hilo_tarea(void *arg)
     return NULL;
 }
 
-/*
- * Crea el hilo de la tarea. SIGINT se bloquea mientras se crea, porque el
- * hilo nuevo hereda la mascara de senales: asi Ctrl+C siempre lo recibe el
- * hilo principal, y tambien los trabajadores del pool, que el hilo de la
- * tarea crea despues, quedan con SIGINT bloqueado.
- */
+/* Prepara la tarea y crea el hilo que la ejecuta. */
 static int lanzar_tarea(Editor *ed, char tipo, const char *origen, const char *destino)
 {
     TareaFondo *t = &ed->tarea;
@@ -243,7 +176,6 @@ static int lanzar_tarea(Editor *ed, char tipo, const char *origen, const char *d
     t->resultado       = 0;
     t->recargo_abierto = 0;
 
-    /* Ningun otro hilo usa el progreso ahora: se reinicia desde cero. */
     huff_progreso_destruir(&t->progreso);
     huff_progreso_iniciar(&t->progreso);
 
@@ -262,9 +194,6 @@ static int lanzar_tarea(Editor *ed, char tipo, const char *origen, const char *d
     }
     t->activa = 1;
 
-    /* Esperar (dormido, sin espera activa) a que la tarea tome su cerrojo.
-       Asi, cuando el usuario escribe el siguiente comando, el archivo ya
-       esta protegido. */
     pthread_mutex_lock(&t->mutex);
     while (!t->arrancado) {
         pthread_cond_wait(&t->estado, &t->mutex);
@@ -277,7 +206,7 @@ static int lanzar_tarea(Editor *ed, char tipo, const char *origen, const char *d
     return 0;
 }
 
-/* Imprime el resultado de una tarea ya terminada (despues del join). */
+/* Informa como termino la tarea. */
 static void informar_resultado(Editor *ed)
 {
     TareaFondo *t = &ed->tarea;
@@ -311,9 +240,7 @@ static void informar_resultado(Editor *ed)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Ciclo de vida                                                      */
-/* ------------------------------------------------------------------ */
+/* Inicio, seguimiento y cierre de las tareas. */
 
 void fondo_iniciar(Editor *ed)
 {
@@ -342,7 +269,6 @@ void fondo_destruir(Editor *ed)
     pthread_rwlock_destroy(&ed->cerrojo);
 }
 
-/* Si la tarea ya termino, le hace join e informa. Se llama antes de cada prompt. */
 void fondo_revisar(Editor *ed)
 {
     TareaFondo *t = &ed->tarea;
@@ -350,19 +276,16 @@ void fondo_revisar(Editor *ed)
 
     if (!tarea_terminada(t)) return;
 
-    pthread_join(t->hilo, NULL);   /* el hilo ya termino: no bloquea */
+    pthread_join(t->hilo, NULL);
     t->activa = 0;
     informar_resultado(ed);
 }
 
-/* Al salir del editor: si hay una tarea, se cancela y se espera (join limpio). */
 void fondo_finalizar(Editor *ed)
 {
     TareaFondo *t = &ed->tarea;
     if (!t->activa) return;
 
-    /* Si el trabajo de Huffman ya acabo (solo falta colocar el resultado),
-       no se cancela: se espera unos milisegundos a que termine. */
     int huff_terminado = 0;
     huff_progreso_leer(&t->progreso, NULL, NULL, &huff_terminado);
 
@@ -397,16 +320,14 @@ void fondo_texto_prompt(Editor *ed, char *buf, size_t n)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Cerrojo de lectores-escritores para el hilo principal              */
-/* ------------------------------------------------------------------ */
+/* Cerrojos para coordinar el acceso al archivo. */
 
 int fondo_tomar_cerrojo(Editor *ed, Acceso acceso)
 {
     int r = 0;
     if (acceso == ACCESO_LECTOR)   r = pthread_rwlock_tryrdlock(&ed->cerrojo);
     if (acceso == ACCESO_ESCRITOR) r = pthread_rwlock_trywrlock(&ed->cerrojo);
-    return (r == 0) ? 0 : -1;      /* r == EBUSY: otro hilo lo tiene */
+    return (r == 0) ? 0 : -1;
 }
 
 void fondo_soltar_cerrojo(Editor *ed, Acceso acceso)
@@ -416,11 +337,8 @@ void fondo_soltar_cerrojo(Editor *ed, Acceso acceso)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Comandos                                                           */
-/* ------------------------------------------------------------------ */
+/* Comandos de compresion, descompresion y progreso. */
 
-/* c [salida.huff]  --  comprimir el archivo abierto en segundo plano. */
 int cmd_c(Editor *ed, const char *arg)
 {
     if (!ed_esta_abierto(ed)) {
@@ -452,7 +370,6 @@ int cmd_c(Editor *ed, const char *arg)
     return lanzar_tarea(ed, 'c', ed->ruta, destino);
 }
 
-/* k <entrada.huff> <salida>  --  descomprimir en segundo plano. */
 int cmd_k(Editor *ed, const char *arg)
 {
     if (ed->tarea.activa) {
@@ -460,7 +377,6 @@ int cmd_k(Editor *ed, const char *arg)
         return -1;
     }
 
-    /* %511s: lee una palabra de hasta 511 caracteres (ED_MAX_RUTA - 1). */
     char origen[ED_MAX_RUTA], destino[ED_MAX_RUTA];
     if (arg == NULL || sscanf(arg, "%511s %511s", origen, destino) != 2) {
         printf("Uso: k <entrada.huff> <salida>\n");
@@ -474,7 +390,6 @@ int cmd_k(Editor *ed, const char *arg)
     return lanzar_tarea(ed, 'k', origen, destino);
 }
 
-/* e [v]  --  estado de la tarea; con 'v' se muestra en vivo hasta que termine. */
 int cmd_e(Editor *ed, const char *arg)
 {
     TareaFondo *t = &ed->tarea;
@@ -491,16 +406,11 @@ int cmd_e(Editor *ed, const char *arg)
 
     printf("Progreso en vivo (Ctrl+C vuelve al editor sin cancelar la tarea):\n");
 
-    /*
-     * huff_progreso_esperar duerme al hilo hasta que el progreso cambie o
-     * pasen 200 ms; no consume CPU mientras espera (sin espera activa).
-     */
     while (!tarea_terminada(t)) {
         imprimir_estado(t, "\r");
         int huff_terminado = huff_progreso_esperar(&t->progreso, 200);
         if (fondo_hubo_senal()) break;
         if (huff_terminado) {
-            /* Huffman acabo; solo falta que la tarea coloque el resultado. */
             esperar_fin_tarea(t);
         }
     }

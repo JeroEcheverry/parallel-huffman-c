@@ -4,24 +4,14 @@
 
 #include "editor.h"
 
-#include <sys/stat.h>   /* fstat, struct stat, macros S_I... */
+#include <sys/stat.h>
 #include <unistd.h>
-#include <stdio.h>      /* printf, perror                    */
-#include <stdlib.h>     /* free                              */
-#include <string.h>     /* strstr                            */
-#include <time.h>       /* localtime, strftime               */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
-/* ---------------------------------------------------------------- */
-/* s <palabra>  --  buscar en el archivo                             */
-/* ---------------------------------------------------------------- */
-
-/*
- * Busca 'palabra' como subcadena en cada linea del archivo (no busca
- * palabra completa: "casa" tambien encuentra "casaca") e imprime las
- * lineas donde aparece.
- *
- * Retorna el numero de lineas donde aparecio, o -1 en error.
- */
+/* Busqueda de texto en las lineas del archivo. */
 int ed_buscar(Editor *ed, const char *palabra)
 {
     if (!ed_esta_abierto(ed)) return -1;
@@ -44,11 +34,7 @@ int ed_buscar(Editor *ed, const char *palabra)
     return encontradas;
 }
 
-/* ---------------------------------------------------------------- */
-/* m  --  metadatos del archivo                                       */
-/* ---------------------------------------------------------------- */
-
-/* Convierte st_mode a la notacion de 9 caracteres de 'ls -l' (rwxrwxrwx). */
+/* Convierte los permisos del archivo a texto. */
 static void permisos_a_texto(mode_t modo, char *salida)
 {
     salida[0] = (modo & S_IRUSR) ? 'r' : '-';
@@ -63,10 +49,7 @@ static void permisos_a_texto(mode_t modo, char *salida)
     salida[9] = '\0';
 }
 
-/*
- * Imprime los metadatos del archivo abierto con fstat(2): tamano, permisos,
- * numero de inodo, cantidad de enlaces y fecha de modificacion.
- */
+/* Muestra informacion del archivo abierto. */
 int ed_metadatos(Editor *ed)
 {
     if (!ed_esta_abierto(ed)) return -1;

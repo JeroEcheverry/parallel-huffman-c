@@ -6,21 +6,13 @@
 
 #include "editor.h"
 
-#include <unistd.h>   /* write          */
-#include <stdio.h>    /* printf         */
-#include <stdlib.h>   /* strtol         */
-#include <string.h>   /* strlen         */
-#include <errno.h>    /* errno          */
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 
-/* ---------------------------------------------------------------- */
-/* Utilidades internas                                                */
-/* ---------------------------------------------------------------- */
-
-/*
- * Convierte una cadena a numero de linea (>= 1). Se usa strtol y no atoi
- * porque atoi no distingue "0 valido" de "no se pudo convertir".
- * Retorna el numero, o -1 si no es un entero positivo valido.
- */
+/* Validaciones usadas por los comandos. */
 static long parsear_numero(const char *txt)
 {
     if (txt == NULL || *txt == '\0') return -1;
@@ -40,7 +32,6 @@ static long parsear_numero(const char *txt)
     return v;
 }
 
-/* Verifica que haya un archivo abierto. Retorna 0 si lo hay, -1 si no. */
 static int exigir_archivo(const Editor *ed)
 {
     if (!ed_esta_abierto(ed)) {
@@ -50,9 +41,7 @@ static int exigir_archivo(const Editor *ed)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* o <archivo>  --  abrir o crear                                     */
-/* ---------------------------------------------------------------- */
+/* Abrir y mostrar el contenido del archivo. */
 int cmd_o(Editor *ed, const char *arg)
 {
     if (arg == NULL || *arg == '\0') {
@@ -61,19 +50,16 @@ int cmd_o(Editor *ed, const char *arg)
     }
 
     if (ed_abrir(ed, arg) == -1) {
-        return -1;   /* el error ya se reporto con perror */
+        return -1;
     }
 
-    hist_registrar(ed);   /* estado inicial, version 0 del historial */
+    hist_registrar(ed);
 
     printf("Archivo '%s' abierto (fd=%d, %ld bytes, %zu lineas).\n",
            ed->ruta, ed->fd, (long)ed->tam, ed->n_lineas);
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* p [n]  --  imprimir linea n, o todo el archivo                     */
-/* ---------------------------------------------------------------- */
 int cmd_p(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -105,14 +91,12 @@ int cmd_p(Editor *ed, const char *arg)
     return ed_imprimir_linea(ed, (size_t)n_linea - 1);
 }
 
-/* ---------------------------------------------------------------- */
-/* a <texto>  --  anadir linea al final                                */
-/* ---------------------------------------------------------------- */
+/* Modificar el archivo. */
 int cmd_a(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
 
-    if (arg == NULL) arg = "";   /* sin texto anade una linea en blanco */
+    if (arg == NULL) arg = "";
 
     if (ed_anexar(ed, arg) == -1) return -1;
     hist_registrar(ed);
@@ -122,9 +106,6 @@ int cmd_a(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* d <n>  --  borrar linea n                                          */
-/* ---------------------------------------------------------------- */
 int cmd_d(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -152,11 +133,6 @@ int cmd_d(Editor *ed, const char *arg)
     return 0;
 }
 
-/*
- * i <n> <texto>  --  insertar texto como nueva linea n.
- * strtol deja en 'fin' el primer caracter que no pudo convertir, que es
- * justo donde termina el numero y empieza el texto.
- */
 int cmd_i(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -175,7 +151,6 @@ int cmd_i(Editor *ed, const char *arg)
         return -1;
     }
 
-    /* se permite insertar una posicion mas alla de la ultima (= anadir al final) */
     if ((size_t)n_linea > ed->n_lineas + 1) {
         printf("Error: no se puede insertar en la linea %ld (el archivo tiene %zu lineas).\n",
                n_linea, ed->n_lineas);
@@ -192,9 +167,7 @@ int cmd_i(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* s <palabra>  --  buscar en el archivo                              */
-/* ---------------------------------------------------------------- */
+/* Buscar texto y mostrar los datos del archivo. */
 int cmd_s(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -215,21 +188,16 @@ int cmd_s(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* m  --  metadatos del archivo (fstat)                                */
-/* ---------------------------------------------------------------- */
 int cmd_m(Editor *ed, const char *arg)
 {
-    (void)arg;   /* este comando no recibe argumentos */
+    (void)arg;
 
     if (exigir_archivo(ed) == -1) return -1;
 
     return ed_metadatos(ed);
 }
 
-/* ---------------------------------------------------------------- */
-/* y <n>  --  copiar linea n al portapapeles                          */
-/* ---------------------------------------------------------------- */
+/* Copiar y pegar lineas. */
 int cmd_y(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -252,9 +220,6 @@ int cmd_y(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* x <n>  --  pegar el portapapeles como nueva linea n                */
-/* ---------------------------------------------------------------- */
 int cmd_x(Editor *ed, const char *arg)
 {
     if (exigir_archivo(ed) == -1) return -1;
@@ -278,9 +243,7 @@ int cmd_x(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* u  --  deshacer                                                     */
-/* ---------------------------------------------------------------- */
+/* Deshacer y rehacer cambios. */
 int cmd_u(Editor *ed, const char *arg)
 {
     (void)arg;
@@ -300,9 +263,6 @@ int cmd_u(Editor *ed, const char *arg)
     return 0;
 }
 
-/* ---------------------------------------------------------------- */
-/* r  --  rehacer                                                      */
-/* ---------------------------------------------------------------- */
 int cmd_r(Editor *ed, const char *arg)
 {
     (void)arg;
