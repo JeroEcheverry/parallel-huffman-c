@@ -1,6 +1,6 @@
 # parallel-huffman-c
 
-Compresor de archivos con **codificación de Huffman concurrente** en C (hilos POSIX), integrado como tarea en segundo plano en un editor de texto de línea de comandos.
+Compresor de archivos con **codificación de Huffman concurrente** en C, integrado como tarea en segundo plano en un editor de texto de línea de comandos.
 
 Proyecto del Parcial 2 de Sistemas Operativos (SO2026B), Universidad EAFIT: concurrencia y sincronización con `pthread`, mutex, variables de condición y cerrojos de lectores-escritores.
 
@@ -45,26 +45,6 @@ Para ver el avance con archivos pequeños en una demostración, se puede hacer m
 HUFF_DEMORA_MS=100 ./editor_huff notas.txt
 ```
 
-## Arquitectura
-
-```
-                     editor_huff
- ┌─────────────────────────────────────────────────────┐
- │ Hilo principal (REPL)                               │
- │   lee comandos; nunca se bloquea por el archivo     │
- │   (tryrdlock / trywrlock)                           │
- │        │ c / k                                      │
- │        ▼                                            │
- │ Hilo de la tarea (fondo.c)                          │
- │   toma el cerrojo del archivo y llama al módulo     │
- │        │                                            │
- │        ▼                                            │
- │ Módulo Huffman                                      │
- │   pool de N hilos trabajadores (pool.c)             │
- │   + hilo coordinador que escribe en orden           │
- └─────────────────────────────────────────────────────┘
-```
-
 ### Compresión (`huffman/codificar.c`)
 
 1. Se lee el archivo y se divide en bloques de 64 KiB.
@@ -91,26 +71,6 @@ Con la tabla de tamaños del encabezado, cada bloque sabe dónde empieza sin dec
 
 Todos los bloques usan el mismo árbol, pero cada uno empieza en un byte nuevo: así ningún byte de la salida es compartido por dos bloques.
 
-## Protocolo de sincronización
-
-| Recurso compartido | Primitiva | Quiénes lo usan | Por qué |
-|---|---|---|---|
-| Contador de la siguiente tarea del pool | `pthread_mutex_t` | Trabajadores | Dos hilos no deben tomar el mismo bloque |
-| `listo` de cada bloque y `error` (compresión) | `pthread_mutex_t` + `pthread_cond_t bloque_listo` | Trabajadores y coordinador | El coordinador duerme hasta que el bloque que le toca esté listo; escribe en orden sin espera activa |
-| Progreso (`hechos`, `total`, `terminado`, `cancelar`) | `pthread_mutex_t` + `pthread_cond_t cambio` | Trabajadores, coordinador y editor | `e v` duerme hasta que el progreso cambie (`pthread_cond_timedwait`) |
-| Archivo abierto en el editor y su índice de líneas | `pthread_rwlock_t` | Hilo principal y tarea | Lectores-escritores: comprimir lee; editar y descomprimir sobre el archivo escriben |
-| Estado de la tarea (`arrancado`, `terminada`, `resultado`) | `pthread_mutex_t` + `pthread_cond_t estado` | Tarea y hilo principal | El editor espera a que la tarea tome su cerrojo antes de aceptar el siguiente comando |
-| Tablas de frecuencias por bloque y zonas de salida por bloque | ninguna | Un solo hilo cada una | Datos particionados: no hay memoria compartida que proteger |
-
-**Lectores-escritores en el editor.** Cada comando declara en la tabla de `repl.c` si lee (`p s m y`) o modifica (`a d i x u r o`) el archivo. Mientras se comprime, la tarea tiene el cerrojo de lectura: los lectores siguen funcionando y los escritores se rechazan con un mensaje. El hilo principal usa `pthread_rwlock_tryrdlock`/`trywrlock`, que retornan `EBUSY` de inmediato en lugar de dormir, así la interfaz nunca se congela.
-
-**Sin espera activa.** Todos los puntos donde un hilo espera a otro usan `pthread_cond_wait`, `pthread_cond_timedwait` o `pthread_join`; ningún hilo pregunta en un ciclo.
-
-**Sin interbloqueos.** Nunca se toma un mutex mientras se espera otro, salvo en un solo orden: el cerrojo del archivo antes de los mutex internos del compresor. El hilo principal nunca se bloquea esperando el cerrojo del archivo (usa *try*), y solo hace `pthread_join` cuando la tarea ya terminó o fue cancelada.
-
-**Señales.** `SIGINT` (Ctrl+C) se bloquea en todos los hilos de trabajo (heredan la máscara al crearse), así que solo lo recibe el hilo principal. El manejador solo enciende una bandera de tipo `sig_atomic_t`; el bucle del editor la atiende y cancela la tarea.
-
-**Recursos.** Cada función usa el patrón `goto fin`: todos los recursos empiezan vacíos y en `fin` se libera solo lo que se alcanzó a reservar. Si una compresión falla o se cancela, se borra el archivo de salida incompleto. Al salir, el editor cancela la tarea, le hace `pthread_join` y destruye mutex, condiciones y cerrojos.
 
 ## Pruebas
 
@@ -131,14 +91,6 @@ Para revisar fugas de memoria:
 valgrind --leak-check=full ./huff c archivo.txt archivo.huff 4
 ```
 
-## Rendimiento
-
-Resultado de `make benchmark` en la máquina de pruebas:
-
-> Pega aquí la tabla que imprime `make benchmark`, indicando procesador y número de núcleos.
-
-El speedup no crece linealmente con los hilos: la construcción del árbol, la escritura del archivo y la reducción de frecuencias son secuenciales (ley de Amdahl), y con más hilos que núcleos solo se agrega costo de cambio de contexto.
-
 ## Decisiones de diseño
 
 - **Bloques de 64 KiB:** suficientes bloques para repartir entre los hilos, con un costo de 8 bytes de tabla y como máximo 7 bits de relleno por bloque.
@@ -156,8 +108,5 @@ editor/    editor del Parcial 1 + fondo.c (tareas en segundo plano)
 pruebas/   verificar.sh, prueba_editor.sh, benchmark.sh
 ```
 
-## Equipo
-
 Universidad EAFIT, Sistemas Operativos SO2026B.
 
-- Jerónimo Echeverry ([@JeroEcheverry](https://github.com/JeroEcheverry))
