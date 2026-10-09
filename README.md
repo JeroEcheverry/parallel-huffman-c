@@ -52,6 +52,71 @@ Para ver el avance con archivos pequeños en una demostración, se puede hacer m
 HUFF_DEMORA_MS=100 ./editor_huff notas.txt
 ```
 
+## Probarlo uno mismo
+
+No hace falta correr los scripts para comprobar que funciona. Estos son los pasos a mano.
+
+### 1. Compilar
+
+```bash
+git clone https://github.com/JeroEcheverry/parallel-huffman-c.git
+cd parallel-huffman-c
+make
+```
+
+### 2. Comprimir y descomprimir desde el editor
+
+```bash
+./editor_huff mis_notas.txt        # si el archivo no existe, se crea
+```
+
+Dentro del editor:
+
+```
+ed> a Primera linea de prueba
+ed> a Segunda linea de prueba
+ed> c                              <- comprime a mis_notas.txt.huff en segundo plano
+ed>                                <- Enter: aparece "[segundo plano] Compresion terminada"
+ed> k mis_notas.txt.huff copia.txt <- descomprime en segundo plano
+ed>                                <- Enter: aparece "Descompresion terminada"
+ed> o copia.txt
+ed> p                              <- debe mostrar las mismas lineas
+ed> q
+```
+
+Y fuera del editor, la prueba definitiva de que no se perdió ni un byte:
+
+```bash
+md5sum mis_notas.txt copia.txt     # los dos hashes deben ser iguales
+```
+
+Con un archivo tan pequeño el `.huff` pesa más que el original: el encabezado ocupa unos 2 KB fijos. Con archivos grandes sí se nota la compresión.
+
+### 3. Ver la concurrencia: editar mientras se comprime
+
+```bash
+seq 1 3000000 > grande.txt                    # unos 22 MB de texto
+HUFF_DEMORA_MS=200 ./editor_huff grande.txt   # la demora hace visible el avance
+```
+
+```
+ed> c
+ed [c 0%]> p 1        <- SE ACEPTA: leer convive con la compresion (lector)
+ed [c 5%]> a hola     <- SE RECHAZA: "Archivo ocupado..." (escritor)
+ed [c 9%]> e          <- barra de progreso
+ed [c 14%]> e v       <- barra en vivo hasta el 100 %
+ed> a hola            <- ahora si se acepta
+ed> c otra.huff       <- y mientras corre, Ctrl+C: se cancela sin cerrar el editor
+ed> q
+```
+
+El porcentaje del prompt se actualiza cada vez que se presiona Enter; `e v` lo muestra en vivo.
+
+```bash
+ls -l grande.txt grande.txt.huff    # el .huff queda en menos de la mitad
+ls otra.huff                        # no existe: la tarea cancelada no deja archivos a medias
+```
+
 ### Compresión (`huffman/codificar.c`)
 
 1. Se lee el archivo y se divide en bloques de 64 KiB.
